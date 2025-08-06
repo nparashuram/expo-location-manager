@@ -8,28 +8,27 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.PersistableBundle
 import android.util.Log
-import com.google.android.gms.location.Geofence
-import com.google.android.gms.location.GeofenceStatusCodes
-import com.google.android.gms.location.GeofencingClient
-import com.google.android.gms.location.GeofencingEvent
-import com.google.android.gms.location.GeofencingRequest
-import com.google.android.gms.location.LocationServices
 import expo.modules.interfaces.taskManager.TaskConsumer
 import expo.modules.interfaces.taskManager.TaskConsumerInterface
 import expo.modules.interfaces.taskManager.TaskInterface
 import expo.modules.interfaces.taskManager.TaskManagerUtilsInterface
 import expo.modules.location.GeofencingException
 import expo.modules.location.LocationHelpers
-import expo.modules.location.records.GeofencingRegionState
 import expo.modules.location.LocationModule
+import expo.modules.location.geofencing.CustomGeofence
+import expo.modules.location.geofencing.CustomGeofenceStatusCodes
+import expo.modules.location.geofencing.CustomGeofencingClient
+import expo.modules.location.geofencing.CustomGeofencingEvent
+import expo.modules.location.geofencing.CustomGeofencingRequest
+import expo.modules.location.records.GeofencingRegionState
 import java.util.UUID
 
 class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsInterface?) : TaskConsumer(context, taskManagerUtils), TaskConsumerInterface {
   private var mTask: TaskInterface? = null
   private var mPendingIntent: PendingIntent? = null
-  private var mGeofencingClient: GeofencingClient? = null
-  private var mGeofencingRequest: GeofencingRequest? = null
-  private var mGeofencingList: MutableList<Geofence> = ArrayList()
+  private var mGeofencingClient: CustomGeofencingClient? = null
+  private var mGeofencingRequest: CustomGeofencingRequest? = null
+  private var mGeofencingList: MutableList<CustomGeofence> = ArrayList()
   private var mRegions: MutableMap<String, PersistableBundle> = HashMap()
 
   //region TaskConsumerInterface
@@ -58,12 +57,12 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
   }
 
   override fun didReceiveBroadcast(intent: Intent) {
-    val event = GeofencingEvent.fromIntent(intent) ?: run {
+    val event = CustomGeofencingEvent.fromIntent(intent) ?: run {
       Log.w(TAG, "Received a null geofencing event. Ignoring")
       return
     }
 
-    if (event.hasError()) {
+    if (event.hasError) {
       val errorMessage = getErrorString(event.errorCode)
       val error = Error(errorMessage)
       mTask?.execute(null, error)
@@ -74,7 +73,7 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
     val geofenceTransition = event.geofenceTransition
     val regionState = regionStateForTransitionType(geofenceTransition)
     val eventType = eventTypeFromTransitionType(geofenceTransition)
-    val triggeringGeofences = event.triggeringGeofences ?: return
+    val triggeringGeofences = event.triggeringGeofences
 
     for (geofence in triggeringGeofences) {
       mRegions[geofence.requestId]?.let {
@@ -143,7 +142,7 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
     // Prepare pending intent, geofencing request and client.
     mPendingIntent = preparePendingIntent()
     mGeofencingRequest = prepareGeofencingRequest(mGeofencingList)
-    mGeofencingClient = LocationServices.getGeofencingClient(getContext())
+    mGeofencingClient = CustomGeofencingClient(getContext())
 
     try {
       mPendingIntent?.let { pendingIntent ->
@@ -163,9 +162,9 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
     }
   }
 
-  private fun prepareGeofencingRequest(geofences: List<Geofence>): GeofencingRequest {
-    return GeofencingRequest.Builder()
-      .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_EXIT)
+  private fun prepareGeofencingRequest(geofences: List<CustomGeofence>): CustomGeofencingRequest {
+    return CustomGeofencingRequest.Builder()
+      .setInitialTrigger(CustomGeofencingRequest.INITIAL_TRIGGER_ENTER or CustomGeofencingRequest.INITIAL_TRIGGER_EXIT)
       .addGeofences(geofences)
       .build()
   }
@@ -185,18 +184,18 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
     } ?: throw GeofencingException(errorMessage)
   }
 
-  private fun geofenceFromRegion(region: Map<String, Any>): Geofence {
+  private fun geofenceFromRegion(region: Map<String, Any>): CustomGeofence {
     val identifier = region["identifier"] as? String ?: UUID.randomUUID().toString()
     val radius = getParamAsDouble(region["radius"], "Region: radius: `${region["radius"]}` can't be cast to Double")
     val longitude = getParamAsDouble(region["longitude"], "Region: longitude: `${region["longitude"]}` can't be cast to Double")
     val latitude = getParamAsDouble(region["latitude"], "Region: latitude `${region["latitude"]}` can't be cast to Double")
     val notifyOnEnter = region["notifyOnEnter"] as? Boolean ?: true
     val notifyOnExit = region["notifyOnExit"] as? Boolean ?: true
-    val transitionTypes = (if (notifyOnEnter) Geofence.GEOFENCE_TRANSITION_ENTER else 0) or if (notifyOnExit) Geofence.GEOFENCE_TRANSITION_EXIT else 0
-    return Geofence.Builder()
+    val transitionTypes = (if (notifyOnEnter) CustomGeofence.GEOFENCE_TRANSITION_ENTER else 0) or if (notifyOnExit) CustomGeofence.GEOFENCE_TRANSITION_EXIT else 0
+    return CustomGeofence.Builder()
       .setRequestId(identifier)
       .setCircularRegion(latitude, longitude, radius.toFloat())
-      .setExpirationDuration(Geofence.NEVER_EXPIRE)
+      .setExpirationDuration(CustomGeofence.NEVER_EXPIRE)
       .setTransitionTypes(transitionTypes)
       .build()
   }
@@ -216,16 +215,16 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
 
   private fun regionStateForTransitionType(transitionType: Int): GeofencingRegionState {
     return when (transitionType) {
-      Geofence.GEOFENCE_TRANSITION_ENTER, Geofence.GEOFENCE_TRANSITION_DWELL -> GeofencingRegionState.INSIDE
-      Geofence.GEOFENCE_TRANSITION_EXIT -> GeofencingRegionState.OUTSIDE
+      CustomGeofence.GEOFENCE_TRANSITION_ENTER, CustomGeofence.GEOFENCE_TRANSITION_DWELL -> GeofencingRegionState.INSIDE
+      CustomGeofence.GEOFENCE_TRANSITION_EXIT -> GeofencingRegionState.OUTSIDE
       else -> GeofencingRegionState.UNKNOWN
     }
   }
 
   private fun eventTypeFromTransitionType(transitionType: Int): Int {
     return when (transitionType) {
-      Geofence.GEOFENCE_TRANSITION_ENTER -> LocationModule.GEOFENCING_EVENT_ENTER
-      Geofence.GEOFENCE_TRANSITION_EXIT -> LocationModule.GEOFENCING_EVENT_EXIT
+      CustomGeofence.GEOFENCE_TRANSITION_ENTER -> LocationModule.GEOFENCING_EVENT_ENTER
+      CustomGeofence.GEOFENCE_TRANSITION_EXIT -> LocationModule.GEOFENCING_EVENT_EXIT
       else -> 0
     }
   }
@@ -235,9 +234,9 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
 
     private fun getErrorString(errorCode: Int): String {
       return when (errorCode) {
-        GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE -> "Geofencing not available."
-        GeofenceStatusCodes.GEOFENCE_TOO_MANY_GEOFENCES -> "Too many geofences."
-        GeofenceStatusCodes.GEOFENCE_TOO_MANY_PENDING_INTENTS -> "Too many pending intents."
+        CustomGeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE -> "Geofencing not available."
+        CustomGeofenceStatusCodes.GEOFENCE_TOO_MANY_GEOFENCES -> "Too many geofences."
+        CustomGeofenceStatusCodes.GEOFENCE_TOO_MANY_PENDING_INTENTS -> "Too many pending intents."
         else -> "Unknown geofencing error."
       }
     } //endregion

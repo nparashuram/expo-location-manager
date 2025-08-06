@@ -35,6 +35,9 @@ internal class LocationUnknownException :
 internal class SensorManagerUnavailable :
   CodedException("Sensor manager is unavailable")
 
+internal class LocationManagerUnavailable :
+  CodedException("Location manager is unavailable")
+
 internal class GeocodeException(message: String?, cause: Throwable? = null) :
   CodedException("An exception occurred when accessing the geocode: ${message ?: ""} ${cause?.message ?: ""}")
 

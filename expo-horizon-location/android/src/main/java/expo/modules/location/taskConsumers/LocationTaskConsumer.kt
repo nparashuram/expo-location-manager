@@ -7,16 +7,16 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.location.Criteria
 import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Looper
 import android.os.PersistableBundle
 import android.util.Log
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
 import expo.modules.core.MapHelper
 import expo.modules.core.arguments.MapArguments
 import expo.modules.core.arguments.ReadableArguments
@@ -39,13 +39,13 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
   private var mTask: TaskInterface? = null
   private var mPendingIntent: PendingIntent? = null
   private var mService: LocationTaskService? = null
-  private var mLocationRequest: LocationRequest? = null
+  private var mLocationCriteria: Criteria? = null
   private var mLastReportedLocation: Location? = null
   private var mDeferredDistance = 0.0
   private val mDeferredLocations: MutableList<Location> = ArrayList()
   private var mIsHostPaused = true
-  private val mLocationClient: FusedLocationProviderClient by lazy {
-    LocationServices.getFusedLocationProviderClient(context)
+  private val mLocationManager: LocationManager by lazy {
+    context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
   }
 
   //region TaskConsumerInterface
@@ -64,7 +64,7 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
     stopForegroundService()
     mTask = null
     mPendingIntent = null
-    mLocationRequest = null
+    mLocationCriteria = null
   }
 
   override fun setOptions(options: Map<String, Any>) {
@@ -80,15 +80,22 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
 
   override fun didReceiveBroadcast(intent: Intent) {
     mTask ?: return
-    val result = LocationResult.extractResult(intent)
-    if (result != null) {
-      val locations = result.locations
-      deferLocations(locations)
+    
+    // For LocationManager, we need to get the location from the intent extras
+    val location = intent.getParcelableExtra<Location>("location")
+    if (location != null) {
+      deferLocations(listOf(location))
       maybeReportDeferredLocations()
     } else {
       try {
-        mLocationClient.lastLocation.addOnCompleteListener { task ->
-          task.result?.let {
+        val criteria = Criteria().apply {
+          accuracy = Criteria.ACCURACY_FINE
+          powerRequirement = Criteria.POWER_MEDIUM
+        }
+        val bestProvider = mLocationManager.getBestProvider(criteria, true)
+        if (bestProvider != null) {
+          val lastLocation = mLocationManager.getLastKnownLocation(bestProvider)
+          lastLocation?.let {
             deferLocations(listOf(it))
             maybeReportDeferredLocations()
           }
@@ -134,11 +141,11 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
       Log.w(TAG, "Could not find a location task for the location update")
       return
     }
-    mLocationRequest = LocationHelpers.prepareLocationRequest(LocationOptions(task.options))
+    mLocationCriteria = LocationHelpers.prepareLocationCriteria(LocationOptions(task.options))
     mPendingIntent = preparePendingIntent()
 
-    val locationRequest = mLocationRequest ?: run {
-      Log.w(TAG, "Could not find a location request for the location update")
+    val locationCriteria = mLocationCriteria ?: run {
+      Log.w(TAG, "Could not find a location criteria for the location update")
       return
     }
     val intent = mPendingIntent ?: run {
@@ -147,7 +154,10 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
     }
 
     try {
-      mLocationClient.requestLocationUpdates(locationRequest, intent)
+      val bestProvider = mLocationManager.getBestProvider(locationCriteria, true)
+      if (bestProvider != null) {
+        mLocationManager.requestLocationUpdates(bestProvider, 0L, 0f, intent)
+      }
     } catch (e: SecurityException) {
       Log.w(TAG, "Location request has been rejected.", e)
     }
@@ -155,7 +165,7 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
 
   private fun stopLocationUpdates() {
     mPendingIntent?.let {
-      mLocationClient.removeLocationUpdates(it)
+      mLocationManager.removeUpdates(it)
       it.cancel()
     }
   }
