@@ -1,0 +1,10 @@
+node_modules/
+expo-location/android/build/
+expo-location/node_modules/
+
+app/android/
+app/.expo/
+app/ios
+*.tsbuildinfo
+
+app/package-lock.json
