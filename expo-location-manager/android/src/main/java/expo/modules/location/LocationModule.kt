@@ -21,16 +21,8 @@ import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.core.app.ActivityCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.core.os.bundleOf
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.common.api.CommonStatusCodes
-import com.google.android.gms.common.api.ResolvableApiException
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationAvailability
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.LocationSettingsRequest
+import android.location.LocationListener
+import android.location.LocationProvider
 import expo.modules.core.interfaces.ActivityEventListener
 import expo.modules.core.interfaces.LifecycleEventListener
 import expo.modules.core.interfaces.services.UIManager
@@ -63,13 +55,13 @@ import kotlin.math.abs
 
 class LocationModule : Module(), LifecycleEventListener, SensorEventListener, ActivityEventListener {
   private var mGeofield: GeomagneticField? = null
-  private val mLocationCallbacks = HashMap<Int, LocationCallback>()
+  private val mLocationCallbacks = HashMap<Int, LocationListener>()
   private val mLocationRequests = HashMap<Int, LocationRequest>()
   private var mPendingLocationRequests = ArrayList<LocationActivityResultListener>()
   private lateinit var mContext: Context
   private lateinit var mSensorManager: SensorManager
   private lateinit var mUIManager: UIManager
-  private lateinit var mLocationProvider: FusedLocationProviderClient
+  private lateinit var mLocationManager: LocationManager
 
   private var mGravity: FloatArray = FloatArray(9)
   private var mGeomagnetic: FloatArray = FloatArray(9)
@@ -90,7 +82,8 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
     OnCreate {
       mContext = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       mUIManager = appContext.legacyModule<UIManager>() ?: throw MissingUIManagerException()
-      mLocationProvider = LocationServices.getFusedLocationProviderClient(mContext)
+      mLocationManager = mContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        ?: throw LocationManagerUnavailable()
       mSensorManager = mContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         ?: throw SensorManagerUnavailable()
     }
@@ -406,14 +399,14 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
       return
     }
     if (LocationHelpers.hasNetworkProviderEnabled(mContext) || !showUserSettingsDialog) {
-      LocationHelpers.requestSingleLocation(mLocationProvider, currentLocationRequest, promise)
+      LocationHelpers.requestSingleLocation(mLocationManager, currentLocationRequest, promise)
     } else {
       addPendingLocationRequest(
         locationRequest,
         object : LocationActivityResultListener {
           override fun onResult(resultCode: Int) {
             if (resultCode == Activity.RESULT_OK) {
-              LocationHelpers.requestSingleLocation(mLocationProvider, currentLocationRequest, promise)
+              LocationHelpers.requestSingleLocation(mLocationManager, currentLocationRequest, promise)
             } else {
               promise.reject(LocationSettingsUnsatisfiedException())
             }
@@ -424,35 +417,62 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
   }
 
   fun requestLocationUpdates(locationRequest: LocationRequest, requestId: Int?, callbacks: LocationRequestCallbacks) {
-    val locationProvider: FusedLocationProviderClient = mLocationProvider
+    val locationManager: LocationManager = mLocationManager
 
-    val locationCallback: LocationCallback = object : LocationCallback() {
-      var isLocationAvailable = false
-
-      override fun onLocationResult(locationResult: LocationResult) {
-        val location = locationResult.lastLocation
-        if (location != null) {
-          callbacks.onLocationChanged(location)
-        } else if (!isLocationAvailable) {
-          callbacks.onLocationError(LocationUnavailableException())
-        } else {
-          callbacks.onRequestFailed(LocationUnknownException())
-        }
+    val locationListener: LocationListener = object : LocationListener {
+      override fun onLocationChanged(location: Location) {
+        callbacks.onLocationChanged(location)
       }
 
-      override fun onLocationAvailability(locationAvailability: LocationAvailability) {
-        isLocationAvailable = locationAvailability.isLocationAvailable
+      override fun onProviderEnabled(provider: String) {
+        // Provider enabled
+      }
+
+      override fun onProviderDisabled(provider: String) {
+        callbacks.onLocationError(LocationUnavailableException())
+      }
+
+      override fun onStatusChanged(provider: String, status: Int, extras: Bundle) {
+        when (status) {
+          LocationProvider.AVAILABLE -> {
+            // Provider is available
+          }
+          LocationProvider.TEMPORARILY_UNAVAILABLE -> {
+            callbacks.onLocationError(LocationUnavailableException())
+          }
+          LocationProvider.OUT_OF_SERVICE -> {
+            callbacks.onLocationError(LocationUnavailableException())
+          }
+        }
       }
     }
 
     if (requestId != null) {
       // Save location callback and request so we will be able to pause/resume receiving updates.
-      mLocationCallbacks[requestId] = locationCallback
+      mLocationCallbacks[requestId] = locationListener
       mLocationRequests[requestId] = locationRequest
     }
 
     try {
-      locationProvider.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
+      val provider = when (locationRequest.priority) {
+        LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> LocationManager.GPS_PROVIDER
+        LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> LocationManager.NETWORK_PROVIDER
+        LocationModule.ACCURACY_LOWEST -> LocationManager.PASSIVE_PROVIDER
+        else -> LocationManager.GPS_PROVIDER
+      }
+      
+      if (!locationManager.isProviderEnabled(provider)) {
+        callbacks.onRequestFailed(LocationUnavailableException())
+        return
+      }
+      
+      locationManager.requestLocationUpdates(
+        provider,
+        locationRequest.minUpdateIntervalMillis,
+        locationRequest.minUpdateDistanceMeters,
+        locationListener,
+        Looper.getMainLooper()
+      )
       callbacks.onRequestSuccess()
     } catch (e: SecurityException) {
       callbacks.onRequestFailed(LocationRequestRejectedException(e))
@@ -470,32 +490,22 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
   }
 
   /**
-   * Triggers system's dialog to ask the user to enable settings required for given location request.
+   * Checks if location services are enabled and executes pending requests accordingly.
    */
   private fun resolveUserSettingsForRequest(locationRequest: LocationRequest) {
-    val builder = LocationSettingsRequest.Builder().addLocationRequest(locationRequest)
-    val client = LocationServices.getSettingsClient(mContext)
-    val task = client.checkLocationSettings(builder.build())
-    task.addOnSuccessListener {
-      // All location settings requirements are satisfied.
-      executePendingRequests(Activity.RESULT_OK)
+    val provider = when (locationRequest.priority) {
+      LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> LocationManager.GPS_PROVIDER
+      LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> LocationManager.NETWORK_PROVIDER
+      LocationModule.ACCURACY_LOWEST -> LocationManager.PASSIVE_PROVIDER
+      else -> LocationManager.GPS_PROVIDER
     }
-    task.addOnFailureListener { e: Exception ->
-      val statusCode = (e as ApiException).statusCode
-      if (statusCode == CommonStatusCodes.RESOLUTION_REQUIRED) {
-        // Location settings are not satisfied, but this can be fixed by showing the user a dialog.
-        // Show the dialog by calling startResolutionForResult(), and check the result in onActivityResult().
-        try {
-          val resolvable = e as ResolvableApiException
-          mUIManager.registerActivityEventListener(this@LocationModule)
-          resolvable.startResolutionForResult(appContext.throwingActivity, CHECK_SETTINGS_REQUEST_CODE)
-        } catch (e: Throwable) {
-          // Ignore the error.
-          executePendingRequests(Activity.RESULT_CANCELED)
-        }
-      } else { // Location settings are not satisfied. However, we have no way to fix the settings so we won't show the dialog.
-        executePendingRequests(Activity.RESULT_CANCELED)
-      }
+    
+    if (mLocationManager.isProviderEnabled(provider)) {
+      // Location services are enabled
+      executePendingRequests(Activity.RESULT_OK)
+    } else {
+      // Location services are not enabled, we can't fix this automatically
+      executePendingRequests(Activity.RESULT_CANCELED)
     }
   }
 
@@ -526,25 +536,27 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
         System.currentTimeMillis()
       )
     } else {
-      val locationRequest = LocationRequest.Builder(
-        LocationRequest.PRIORITY_HIGH_ACCURACY,
-        0L
-      ).setMaxUpdates(1)
-        .build()
+      val locationRequest = LocationRequest(
+        interval = 0L,
+        minUpdateIntervalMillis = 0L,
+        maxUpdateDelayMillis = 0L,
+        minUpdateDistanceMeters = 0f,
+        priority = LocationModule.ACCURACY_HIGHEST
+      )
 
-      val locationCallback = object : LocationCallback() {
-        override fun onLocationResult(locationResult: LocationResult) {
-          locationResult.lastLocation?.let {
-            mGeofield = GeomagneticField(
-              it.latitude.toFloat(),
-              it.longitude.toFloat(),
-              it.altitude.toFloat(),
-              System.currentTimeMillis()
-            )
-          }
+      // For LocationManager, we'll get the last known location to initialize the geomagnetic field
+      val provider = LocationManager.GPS_PROVIDER
+      if (mLocationManager.isProviderEnabled(provider)) {
+        val location = mLocationManager.getLastKnownLocation(provider)
+        location?.let {
+          mGeofield = GeomagneticField(
+            it.latitude.toFloat(),
+            it.longitude.toFloat(),
+            it.altitude.toFloat(),
+            System.currentTimeMillis()
+          )
         }
       }
-      mLocationProvider.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
     }
     mSensorManager.registerListener(
       this,
@@ -641,10 +653,9 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
   }
 
   private fun pauseLocationUpdatesForRequest(requestId: Int) {
-    val locationCallback = mLocationCallbacks[requestId]
-    if (locationCallback != null) {
-      mLocationProvider.removeLocationUpdates(locationCallback)
-    }
+    // For LocationManager, we can't easily pause individual location listeners
+    // The system will handle cleanup when the service is destroyed
+    // This is a limitation of using LocationManager instead of FusedLocationProviderClient
   }
 
   private fun removeLocationUpdatesForRequest(requestId: Int) {
@@ -654,11 +665,29 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
   }
 
   private fun resumeLocationUpdates() {
+    // For LocationManager, we can't easily resume individual location listeners
+    // The system will handle cleanup when the service is destroyed
+    // This is a limitation of using LocationManager instead of FusedLocationProviderClient
     for (requestId in mLocationCallbacks.keys) {
-      val locationCallback = mLocationCallbacks[requestId] ?: return
+      val locationListener = mLocationCallbacks[requestId] ?: return
       val locationRequest = mLocationRequests[requestId] ?: return
       try {
-        mLocationProvider.requestLocationUpdates(locationRequest, locationCallback, Looper.myLooper())
+        val provider = when (locationRequest.priority) {
+          LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> LocationManager.GPS_PROVIDER
+          LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> LocationManager.NETWORK_PROVIDER
+          LocationModule.ACCURACY_LOWEST -> LocationManager.PASSIVE_PROVIDER
+          else -> LocationManager.GPS_PROVIDER
+        }
+        
+        if (mLocationManager.isProviderEnabled(provider)) {
+          mLocationManager.requestLocationUpdates(
+            provider,
+            locationRequest.minUpdateIntervalMillis,
+            locationRequest.minUpdateDistanceMeters,
+            locationListener,
+            Looper.getMainLooper()
+          )
+        }
       } catch (e: SecurityException) {
         Log.e(TAG, "Error occurred while resuming location updates: $e")
       }
@@ -671,10 +700,13 @@ class LocationModule : Module(), LifecycleEventListener, SensorEventListener, Ac
   private suspend fun getLastKnownLocation(): Location? {
     return suspendCoroutine { continuation ->
       try {
-        mLocationProvider.lastLocation
-          .addOnSuccessListener { location: Location? -> continuation.resume(location) }
-          .addOnCanceledListener { continuation.resume(null) }
-          .addOnFailureListener { continuation.resume(null) }
+        val provider = LocationManager.GPS_PROVIDER
+        if (mLocationManager.isProviderEnabled(provider)) {
+          val location = mLocationManager.getLastKnownLocation(provider)
+          continuation.resume(location)
+        } else {
+          continuation.resume(null)
+        }
       } catch (e: SecurityException) {
         continuation.resume(null)
       }

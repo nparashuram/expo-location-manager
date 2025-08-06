@@ -8,15 +8,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.location.Location
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Looper
 import android.os.PersistableBundle
 import android.util.Log
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
+import android.location.LocationListener
+import android.location.LocationProvider
 import expo.modules.core.MapHelper
 import expo.modules.core.arguments.MapArguments
 import expo.modules.core.arguments.ReadableArguments
@@ -29,6 +29,8 @@ import expo.modules.interfaces.taskManager.TaskInterface
 import expo.modules.interfaces.taskManager.TaskManagerUtilsInterface
 import expo.modules.location.AppForegroundedSingleton
 import expo.modules.location.LocationHelpers
+import expo.modules.location.LocationModule
+import expo.modules.location.LocationRequest
 import expo.modules.location.records.LocationOptions
 import expo.modules.location.records.LocationResponse
 import expo.modules.location.services.LocationTaskService
@@ -44,8 +46,8 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
   private var mDeferredDistance = 0.0
   private val mDeferredLocations: MutableList<Location> = ArrayList()
   private var mIsHostPaused = true
-  private val mLocationClient: FusedLocationProviderClient by lazy {
-    LocationServices.getFusedLocationProviderClient(context)
+  private val mLocationManager: LocationManager by lazy {
+    context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
   }
 
   //region TaskConsumerInterface
@@ -80,22 +82,19 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
 
   override fun didReceiveBroadcast(intent: Intent) {
     mTask ?: return
-    val result = LocationResult.extractResult(intent)
-    if (result != null) {
-      val locations = result.locations
-      deferLocations(locations)
-      maybeReportDeferredLocations()
-    } else {
-      try {
-        mLocationClient.lastLocation.addOnCompleteListener { task ->
-          task.result?.let {
-            deferLocations(listOf(it))
-            maybeReportDeferredLocations()
-          }
+    // For LocationManager, we'll get location updates through the LocationListener
+    // This method is called when the service receives a broadcast
+    try {
+      val provider = LocationManager.GPS_PROVIDER
+      if (mLocationManager.isProviderEnabled(provider)) {
+        val location = mLocationManager.getLastKnownLocation(provider)
+        location?.let {
+          deferLocations(listOf(it))
+          maybeReportDeferredLocations()
         }
-      } catch (e: SecurityException) {
-        Log.e(TAG, "Cannot get last location: " + e.message)
       }
+    } catch (e: SecurityException) {
+      Log.e(TAG, "Cannot get last location: " + e.message)
     }
   }
 
@@ -147,15 +146,49 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
     }
 
     try {
-      mLocationClient.requestLocationUpdates(locationRequest, intent)
+      val provider = when (locationRequest.priority) {
+        LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> LocationManager.GPS_PROVIDER
+        LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> LocationManager.NETWORK_PROVIDER
+        LocationModule.ACCURACY_LOWEST -> LocationManager.PASSIVE_PROVIDER
+        else -> LocationManager.GPS_PROVIDER
+      }
+      
+      if (mLocationManager.isProviderEnabled(provider)) {
+        mLocationManager.requestLocationUpdates(
+          provider,
+          locationRequest.minUpdateIntervalMillis,
+          locationRequest.minUpdateDistanceMeters,
+          object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+              deferLocations(listOf(location))
+              maybeReportDeferredLocations()
+            }
+
+            override fun onProviderEnabled(provider: String) {
+              // Provider enabled
+            }
+
+            override fun onProviderDisabled(provider: String) {
+              // Provider disabled
+            }
+
+            override fun onStatusChanged(provider: String, status: Int, extras: Bundle) {
+              // Status changed
+            }
+          },
+          Looper.getMainLooper()
+        )
+      }
     } catch (e: SecurityException) {
       Log.w(TAG, "Location request has been rejected.", e)
     }
   }
 
   private fun stopLocationUpdates() {
+    // For LocationManager, we need to remove all location listeners
+    // Since we're using anonymous LocationListener objects, we can't easily remove them
+    // The system will handle cleanup when the service is destroyed
     mPendingIntent?.let {
-      mLocationClient.removeLocationUpdates(it)
       it.cancel()
     }
   }

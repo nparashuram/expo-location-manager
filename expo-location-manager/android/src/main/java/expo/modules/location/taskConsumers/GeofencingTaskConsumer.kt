@@ -8,12 +8,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.PersistableBundle
 import android.util.Log
-import com.google.android.gms.location.Geofence
-import com.google.android.gms.location.GeofenceStatusCodes
-import com.google.android.gms.location.GeofencingClient
-import com.google.android.gms.location.GeofencingEvent
-import com.google.android.gms.location.GeofencingRequest
-import com.google.android.gms.location.LocationServices
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.location.LocationProvider
+import android.os.Looper
 import expo.modules.interfaces.taskManager.TaskConsumer
 import expo.modules.interfaces.taskManager.TaskConsumerInterface
 import expo.modules.interfaces.taskManager.TaskInterface
@@ -27,10 +26,10 @@ import java.util.UUID
 class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsInterface?) : TaskConsumer(context, taskManagerUtils), TaskConsumerInterface {
   private var mTask: TaskInterface? = null
   private var mPendingIntent: PendingIntent? = null
-  private var mGeofencingClient: GeofencingClient? = null
-  private var mGeofencingRequest: GeofencingRequest? = null
-  private var mGeofencingList: MutableList<Geofence> = ArrayList()
+  private var mLocationManager: LocationManager? = null
+  private var mLocationListener: LocationListener? = null
   private var mRegions: MutableMap<String, PersistableBundle> = HashMap()
+  private var mCurrentLocation: Location? = null
 
   //region TaskConsumerInterface
   override fun taskType(): String {
@@ -46,9 +45,9 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
     stopGeofencing()
     mTask = null
     mPendingIntent = null
-    mGeofencingClient = null
-    mGeofencingRequest = null
-    mGeofencingList.clear()
+    mLocationManager = null
+    mLocationListener = null
+    mRegions.clear()
   }
 
   override fun setOptions(options: Map<String, Any>) {
@@ -58,36 +57,9 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
   }
 
   override fun didReceiveBroadcast(intent: Intent) {
-    val event = GeofencingEvent.fromIntent(intent) ?: run {
-      Log.w(TAG, "Received a null geofencing event. Ignoring")
-      return
-    }
-
-    if (event.hasError()) {
-      val errorMessage = getErrorString(event.errorCode)
-      val error = Error(errorMessage)
-      mTask?.execute(null, error)
-      return
-    }
-
-    // Get region state and event type from given transition type.
-    val geofenceTransition = event.geofenceTransition
-    val regionState = regionStateForTransitionType(geofenceTransition)
-    val eventType = eventTypeFromTransitionType(geofenceTransition)
-    val triggeringGeofences = event.triggeringGeofences ?: return
-
-    for (geofence in triggeringGeofences) {
-      mRegions[geofence.requestId]?.let {
-        val data = PersistableBundle()
-
-        // Update region state in region bundle.
-        it.putInt("state", regionState.ordinal)
-        data.putInt("eventType", eventType)
-        data.putPersistableBundle("region", it)
-        val context = context.applicationContext
-        taskManagerUtils.scheduleJob(context, mTask, listOf(data))
-      }
-    }
+    // This method is called when the service receives a broadcast
+    // For our custom geofencing implementation, we handle location updates
+    // through the LocationListener in startGeofencing()
   }
 
   override fun didExecuteJob(jobService: JobService, params: JobParameters): Boolean {
@@ -121,53 +93,126 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
       Log.w(TAG, "There is no location provider available")
       return
     }
-    mRegions = HashMap()
-    mGeofencingList = ArrayList()
 
-    // Create geofences from task options.
+    mLocationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    mRegions = HashMap()
+
+    // Create regions from task options.
     val options = mTask?.options
       ?: throw GeofencingException("Task is null, can't start geofencing")
     val regions: List<HashMap<String, Any>> = (options["regions"] as ArrayList<*>).filterIsInstance<HashMap<String, Any>>()
 
     for (region in regions) {
-      val geofence = geofenceFromRegion(region)
-      val regionIdentifier = geofence.requestId
-
-      // Make a bundle for the region to remember its attributes. Only request ID is public in Geofence object.
+      val regionIdentifier = region["identifier"] as? String ?: UUID.randomUUID().toString()
+      
+      // Make a bundle for the region to remember its attributes.
       mRegions[regionIdentifier] = bundleFromRegion(regionIdentifier, region)
-
-      // Add geofence to the list of observed regions.
-      mGeofencingList.add(geofence)
     }
 
-    // Prepare pending intent, geofencing request and client.
-    mPendingIntent = preparePendingIntent()
-    mGeofencingRequest = prepareGeofencingRequest(mGeofencingList)
-    mGeofencingClient = LocationServices.getGeofencingClient(getContext())
-
-    try {
-      mPendingIntent?.let { pendingIntent ->
-        mGeofencingRequest?.let { geofencingRequest ->
-          mGeofencingClient?.addGeofences(geofencingRequest, pendingIntent)
-        }
-      }
-    } catch (e: SecurityException) {
-      Log.w(TAG, "Geofencing request has been rejected.", e)
-    }
+    // Start location monitoring
+    startLocationMonitoring()
   }
 
   private fun stopGeofencing() {
-    mPendingIntent?.let {
-      mGeofencingClient?.removeGeofences(it)
-      it.cancel()
+    mLocationListener?.let { listener ->
+      mLocationManager?.removeUpdates(listener)
+    }
+    mLocationListener = null
+    mLocationManager = null
+  }
+
+  private fun startLocationMonitoring() {
+    val locationManager = mLocationManager ?: return
+    
+    mLocationListener = object : LocationListener {
+      override fun onLocationChanged(location: Location) {
+        mCurrentLocation = location
+        checkGeofenceTransitions(location)
+      }
+
+      override fun onProviderEnabled(provider: String) {
+        // Provider enabled
+      }
+
+      override fun onProviderDisabled(provider: String) {
+        // Provider disabled
+      }
+
+      override fun onStatusChanged(provider: String, status: Int, extras: Bundle) {
+        // Status changed
+      }
+    }
+
+    try {
+      // Use GPS provider for better accuracy
+      if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+        locationManager.requestLocationUpdates(
+          LocationManager.GPS_PROVIDER,
+          5000L, // 5 seconds
+          10f,   // 10 meters
+          mLocationListener!!,
+          Looper.getMainLooper()
+        )
+      } else if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+        locationManager.requestLocationUpdates(
+          LocationManager.NETWORK_PROVIDER,
+          10000L, // 10 seconds
+          50f,    // 50 meters
+          mLocationListener!!,
+          Looper.getMainLooper()
+        )
+      }
+    } catch (e: SecurityException) {
+      Log.w(TAG, "Location monitoring request has been rejected.", e)
     }
   }
 
-  private fun prepareGeofencingRequest(geofences: List<Geofence>): GeofencingRequest {
-    return GeofencingRequest.Builder()
-      .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_EXIT)
-      .addGeofences(geofences)
-      .build()
+  private fun checkGeofenceTransitions(location: Location) {
+    for ((regionId, regionBundle) in mRegions) {
+      val latitude = regionBundle.getDouble("latitude")
+      val longitude = regionBundle.getDouble("longitude")
+      val radius = regionBundle.getDouble("radius")
+      val notifyOnEnter = regionBundle.getBoolean("notifyOnEnter", true)
+      val notifyOnExit = regionBundle.getBoolean("notifyOnExit", true)
+      val currentState = regionBundle.getInt("state", GeofencingRegionState.UNKNOWN.ordinal)
+
+      val distance = calculateDistance(location.latitude, location.longitude, latitude, longitude)
+      val isInside = distance <= radius
+
+      val newState = if (isInside) GeofencingRegionState.INSIDE else GeofencingRegionState.OUTSIDE
+
+      // Check for transitions
+      if (currentState != newState.ordinal) {
+        when {
+          isInside && notifyOnEnter && currentState == GeofencingRegionState.OUTSIDE.ordinal -> {
+            // ENTER transition
+            triggerGeofenceEvent(regionId, regionBundle, GeofencingRegionState.INSIDE, LocationModule.GEOFENCING_EVENT_ENTER)
+          }
+          !isInside && notifyOnExit && currentState == GeofencingRegionState.INSIDE.ordinal -> {
+            // EXIT transition
+            triggerGeofenceEvent(regionId, regionBundle, GeofencingRegionState.OUTSIDE, LocationModule.GEOFENCING_EVENT_EXIT)
+          }
+        }
+
+        // Update the region state
+        regionBundle.putInt("state", newState.ordinal)
+      }
+    }
+  }
+
+  private fun triggerGeofenceEvent(regionId: String, regionBundle: PersistableBundle, newState: GeofencingRegionState, eventType: Int) {
+    val data = PersistableBundle()
+    data.putInt("eventType", eventType)
+    data.putPersistableBundle("region", regionBundle)
+    
+    val context = context.applicationContext
+    taskManagerUtils.scheduleJob(context, mTask, listOf(data))
+  }
+
+  private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+    val results = FloatArray(1)
+    Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+    return results[0]
   }
 
   private fun preparePendingIntent(): PendingIntent {
@@ -185,61 +230,31 @@ class GeofencingTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtil
     } ?: throw GeofencingException(errorMessage)
   }
 
-  private fun geofenceFromRegion(region: Map<String, Any>): Geofence {
-    val identifier = region["identifier"] as? String ?: UUID.randomUUID().toString()
-    val radius = getParamAsDouble(region["radius"], "Region: radius: `${region["radius"]}` can't be cast to Double")
-    val longitude = getParamAsDouble(region["longitude"], "Region: longitude: `${region["longitude"]}` can't be cast to Double")
-    val latitude = getParamAsDouble(region["latitude"], "Region: latitude `${region["latitude"]}` can't be cast to Double")
-    val notifyOnEnter = region["notifyOnEnter"] as? Boolean ?: true
-    val notifyOnExit = region["notifyOnExit"] as? Boolean ?: true
-    val transitionTypes = (if (notifyOnEnter) Geofence.GEOFENCE_TRANSITION_ENTER else 0) or if (notifyOnExit) Geofence.GEOFENCE_TRANSITION_EXIT else 0
-    return Geofence.Builder()
-      .setRequestId(identifier)
-      .setCircularRegion(latitude, longitude, radius.toFloat())
-      .setExpirationDuration(Geofence.NEVER_EXPIRE)
-      .setTransitionTypes(transitionTypes)
-      .build()
-  }
+
 
   private fun bundleFromRegion(identifier: String, region: Map<String, Any>): PersistableBundle {
     return PersistableBundle().apply {
       val radius = getParamAsDouble(region["radius"], "Region: radius: `${region["radius"]}` can't be cast to Double")
       val longitude = getParamAsDouble(region["longitude"], "Region: longitude: `${region["longitude"]}` can't be cast to Double")
       val latitude = getParamAsDouble(region["latitude"], "Region: latitude: `${region["latitude"]}` can't be cast to Double")
+      val notifyOnEnter = region["notifyOnEnter"] as? Boolean ?: true
+      val notifyOnExit = region["notifyOnExit"] as? Boolean ?: true
+      
       putString("identifier", identifier)
       putDouble("radius", radius)
       putDouble("latitude", latitude)
       putDouble("longitude", longitude)
+      putBoolean("notifyOnEnter", notifyOnEnter)
+      putBoolean("notifyOnExit", notifyOnExit)
       putInt("state", GeofencingRegionState.UNKNOWN.ordinal)
     }
   }
 
-  private fun regionStateForTransitionType(transitionType: Int): GeofencingRegionState {
-    return when (transitionType) {
-      Geofence.GEOFENCE_TRANSITION_ENTER, Geofence.GEOFENCE_TRANSITION_DWELL -> GeofencingRegionState.INSIDE
-      Geofence.GEOFENCE_TRANSITION_EXIT -> GeofencingRegionState.OUTSIDE
-      else -> GeofencingRegionState.UNKNOWN
-    }
-  }
 
-  private fun eventTypeFromTransitionType(transitionType: Int): Int {
-    return when (transitionType) {
-      Geofence.GEOFENCE_TRANSITION_ENTER -> LocationModule.GEOFENCING_EVENT_ENTER
-      Geofence.GEOFENCE_TRANSITION_EXIT -> LocationModule.GEOFENCING_EVENT_EXIT
-      else -> 0
-    }
-  }
 
   companion object {
     private const val TAG = "GeofencingTaskConsumer"
 
-    private fun getErrorString(errorCode: Int): String {
-      return when (errorCode) {
-        GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE -> "Geofencing not available."
-        GeofenceStatusCodes.GEOFENCE_TOO_MANY_GEOFENCES -> "Too many geofences."
-        GeofenceStatusCodes.GEOFENCE_TOO_MANY_PENDING_INTENTS -> "Too many pending intents."
-        else -> "Unknown geofencing error."
-      }
-    } //endregion
+    //endregion
   }
 }

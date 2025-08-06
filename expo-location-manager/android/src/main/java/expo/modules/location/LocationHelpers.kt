@@ -4,11 +4,8 @@ import android.content.Context
 import android.location.Location
 import android.location.LocationManager
 import android.os.Bundle
-import com.google.android.gms.location.CurrentLocationRequest
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.Granularity
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.Priority
+import android.location.LocationListener
+import android.location.LocationProvider
 import expo.modules.interfaces.permissions.Permissions
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
@@ -46,41 +43,48 @@ class LocationHelpers {
     internal fun prepareLocationRequest(options: LocationOptions): LocationRequest {
       val locationParams = mapOptionsToLocationParams(options)
 
-      return LocationRequest.Builder(locationParams.interval)
-        .setMinUpdateIntervalMillis(locationParams.interval)
-        .setMaxUpdateDelayMillis(locationParams.interval)
-        .setMinUpdateDistanceMeters(locationParams.distance)
-        .setPriority(mapAccuracyToPriority(options.accuracy))
-        .build()
+      return LocationRequest(
+        interval = locationParams.interval,
+        minUpdateIntervalMillis = locationParams.interval,
+        maxUpdateDelayMillis = locationParams.interval,
+        minUpdateDistanceMeters = locationParams.distance,
+        priority = mapAccuracyToPriority(options.accuracy)
+      )
     }
 
-    internal fun prepareCurrentLocationRequest(options: LocationOptions): CurrentLocationRequest {
+    internal fun prepareCurrentLocationRequest(options: LocationOptions): LocationRequest {
       val locationParams = mapOptionsToLocationParams(options)
 
-      return CurrentLocationRequest.Builder().apply {
-        setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
-        setPriority(mapAccuracyToPriority(options.accuracy))
-        setMaxUpdateAgeMillis(locationParams.interval)
-      }.build()
+      return LocationRequest(
+        interval = locationParams.interval,
+        minUpdateIntervalMillis = locationParams.interval,
+        maxUpdateDelayMillis = locationParams.interval,
+        minUpdateDistanceMeters = locationParams.distance,
+        priority = mapAccuracyToPriority(options.accuracy)
+      )
     }
 
-    fun requestSingleLocation(locationProvider: FusedLocationProviderClient, locationRequest: CurrentLocationRequest, promise: Promise) {
+    fun requestSingleLocation(locationManager: LocationManager, locationRequest: LocationRequest, promise: Promise) {
       try {
-        locationProvider.getCurrentLocation(locationRequest, null)
-          .addOnSuccessListener { location: Location? ->
-            if (location == null) {
-              promise.reject(CurrentLocationIsUnavailableException())
-              return@addOnSuccessListener
-            }
+        val provider = when (locationRequest.priority) {
+          LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> LocationManager.GPS_PROVIDER
+          LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> LocationManager.NETWORK_PROVIDER
+          LocationModule.ACCURACY_LOWEST -> LocationManager.PASSIVE_PROVIDER
+          else -> LocationManager.GPS_PROVIDER
+        }
+        
+        if (!locationManager.isProviderEnabled(provider)) {
+          promise.reject(CurrentLocationIsUnavailableException())
+          return
+        }
+        
+        val location = locationManager.getLastKnownLocation(provider)
+        if (location == null) {
+          promise.reject(CurrentLocationIsUnavailableException())
+          return
+        }
 
-            promise.resolve(LocationResponse(location))
-          }
-          .addOnFailureListener {
-            promise.reject(LocationRequestRejectedException(it))
-          }
-          .addOnCanceledListener {
-            promise.reject(LocationRequestCancelledException())
-          }
+        promise.resolve(LocationResponse(location))
       } catch (e: SecurityException) {
         promise.reject(LocationRequestRejectedException(e))
       }
@@ -122,10 +126,10 @@ class LocationHelpers {
 
     private fun mapAccuracyToPriority(accuracy: Int): Int {
       return when (accuracy) {
-        LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> Priority.PRIORITY_HIGH_ACCURACY
-        LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        LocationModule.ACCURACY_LOWEST -> Priority.PRIORITY_LOW_POWER
-        else -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        LocationModule.ACCURACY_BEST_FOR_NAVIGATION, LocationModule.ACCURACY_HIGHEST, LocationModule.ACCURACY_HIGH -> LocationModule.ACCURACY_HIGHEST
+        LocationModule.ACCURACY_BALANCED, LocationModule.ACCURACY_LOW -> LocationModule.ACCURACY_BALANCED
+        LocationModule.ACCURACY_LOWEST -> LocationModule.ACCURACY_LOWEST
+        else -> LocationModule.ACCURACY_BALANCED
       }
     }
 
