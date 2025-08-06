@@ -1,5 +1,5 @@
 {
-  "name": "expo-location",
+  "name": "expo-location-manager",
   "version": "18.1.5",
   "description": "Allows reading geolocation information from the device. Your app can poll for the current location or subscribe to location update events.",
   "main": "build/index.js",
