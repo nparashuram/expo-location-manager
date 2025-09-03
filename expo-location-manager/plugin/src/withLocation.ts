@@ -1,9 +1,7 @@
 import {
   AndroidConfig,
   ConfigPlugin,
-  IOSConfig,
   createRunOncePlugin,
-  withInfoPlist,
 } from "expo/config-plugins";
 
 import * as fs from "fs";
@@ -11,55 +9,16 @@ import * as path from "path";
 
 const pkgPath = path.join(__dirname, "..", "..", "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-const LOCATION_USAGE = "Allow $(PRODUCT_NAME) to access your location";
-
-const withBackgroundLocation: ConfigPlugin = (config) => {
-  return withInfoPlist(config, (config) => {
-    if (!Array.isArray(config.modResults.UIBackgroundModes)) {
-      config.modResults.UIBackgroundModes = [];
-    }
-    if (!config.modResults.UIBackgroundModes.includes("location")) {
-      config.modResults.UIBackgroundModes.push("location");
-    }
-    return config;
-  });
-};
 
 const withLocation: ConfigPlugin<
   {
-    locationAlwaysAndWhenInUsePermission?: string | false;
-    locationAlwaysPermission?: string | false;
-    locationWhenInUsePermission?: string | false;
-    isIosBackgroundLocationEnabled?: boolean;
     isAndroidBackgroundLocationEnabled?: boolean;
     isAndroidForegroundServiceEnabled?: boolean;
   } | void
 > = (
   config,
-  {
-    locationAlwaysAndWhenInUsePermission,
-    locationAlwaysPermission,
-    locationWhenInUsePermission,
-    isIosBackgroundLocationEnabled,
-    isAndroidBackgroundLocationEnabled,
-    isAndroidForegroundServiceEnabled,
-  } = {}
+  { isAndroidBackgroundLocationEnabled, isAndroidForegroundServiceEnabled } = {}
 ) => {
-  if (isIosBackgroundLocationEnabled) {
-    config = withBackgroundLocation(config);
-  }
-
-  IOSConfig.Permissions.createPermissionsPlugin({
-    NSLocationAlwaysAndWhenInUseUsageDescription: LOCATION_USAGE,
-    NSLocationAlwaysUsageDescription: LOCATION_USAGE,
-    NSLocationWhenInUseUsageDescription: LOCATION_USAGE,
-  })(config, {
-    NSLocationAlwaysAndWhenInUseUsageDescription:
-      locationAlwaysAndWhenInUsePermission,
-    NSLocationAlwaysUsageDescription: locationAlwaysPermission,
-    NSLocationWhenInUseUsageDescription: locationWhenInUsePermission,
-  });
-
   // If the user has not specified a value for isAndroidForegroundServiceEnabled,
   // we default to the value of isAndroidBackgroundLocationEnabled because we want
   // to enable foreground by default if background location is enabled.

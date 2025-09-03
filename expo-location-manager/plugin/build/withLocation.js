@@ -20,14 +20,13 @@ var __importStar = (this && this.__importStar) || (function () {
         ownKeys = Object.getOwnPropertyNames || function (o) {
             var ar = [];
             for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
         };
         return ownKeys(o);
     };
     return function (mod) {
         if (mod && mod.__esModule) return mod;
         var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        if (mod != null) for (var k in ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
         __setModuleDefault(result, mod);
         return result;
     };
@@ -38,31 +37,8 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const pkgPath = path.join(__dirname, "..", "..", "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-const LOCATION_USAGE = "Allow $(PRODUCT_NAME) to access your location";
-const withBackgroundLocation = (config) => {
-    return (0, config_plugins_1.withInfoPlist)(config, (config) => {
-        if (!Array.isArray(config.modResults.UIBackgroundModes)) {
-            config.modResults.UIBackgroundModes = [];
-        }
-        if (!config.modResults.UIBackgroundModes.includes("location")) {
-            config.modResults.UIBackgroundModes.push("location");
-        }
-        return config;
-    });
-};
-const withLocation = (config, { locationAlwaysAndWhenInUsePermission, locationAlwaysPermission, locationWhenInUsePermission, isIosBackgroundLocationEnabled, isAndroidBackgroundLocationEnabled, isAndroidForegroundServiceEnabled, } = {}) => {
-    if (isIosBackgroundLocationEnabled) {
-        config = withBackgroundLocation(config);
-    }
-    config_plugins_1.IOSConfig.Permissions.createPermissionsPlugin({
-        NSLocationAlwaysAndWhenInUseUsageDescription: LOCATION_USAGE,
-        NSLocationAlwaysUsageDescription: LOCATION_USAGE,
-        NSLocationWhenInUseUsageDescription: LOCATION_USAGE,
-    })(config, {
-        NSLocationAlwaysAndWhenInUseUsageDescription: locationAlwaysAndWhenInUsePermission,
-        NSLocationAlwaysUsageDescription: locationAlwaysPermission,
-        NSLocationWhenInUseUsageDescription: locationWhenInUsePermission,
-    });
+
+const withLocation = (config, { isAndroidBackgroundLocationEnabled, isAndroidForegroundServiceEnabled, } = {}) => {
     // If the user has not specified a value for isAndroidForegroundServiceEnabled,
     // we default to the value of isAndroidBackgroundLocationEnabled because we want
     // to enable foreground by default if background location is enabled.

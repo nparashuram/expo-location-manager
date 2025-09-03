@@ -63,7 +63,6 @@ export declare function getHeadingAsync(): Promise<LocationHeadingObject>;
  * @return A promise which fulfills with a [`LocationSubscription`](#locationsubscription) object.
  *
  * @platform android
- * @platform ios
  */
 export declare function watchHeadingAsync(callback: LocationHeadingCallback, errorHandler?: LocationErrorCallback): Promise<LocationSubscription>;
 /**
@@ -82,7 +81,6 @@ export declare function watchHeadingAsync(callback: LocationHeadingCallback, err
  * objects.
  *
  * @platform android
- * @platform ios
  */
 export declare function geocodeAsync(address: string): Promise<LocationGeocodedLocation[]>;
 /**
@@ -100,7 +98,6 @@ export declare function geocodeAsync(address: string): Promise<LocationGeocodedL
  * @return A promise which fulfills with an array (in most cases its size is 1) of [`LocationGeocodedAddress`](#locationgeocodedaddress) objects.
  *
  * @platform android
- * @platform ios
  */
 export declare function reverseGeocodeAsync(location: Pick<LocationGeocodedLocation, 'latitude' | 'longitude'>): Promise<LocationGeocodedAddress[]>;
 /**

@@ -121,7 +121,6 @@ export async function getHeadingAsync() {
  * @return A promise which fulfills with a [`LocationSubscription`](#locationsubscription) object.
  *
  * @platform android
- * @platform ios
  */
 export async function watchHeadingAsync(callback, errorHandler) {
     const watchId = HeadingSubscriber.registerCallback(callback);
@@ -151,7 +150,6 @@ export async function watchHeadingAsync(callback, errorHandler) {
  * objects.
  *
  * @platform android
- * @platform ios
  */
 export async function geocodeAsync(address) {
     if (typeof address !== 'string') {
@@ -182,7 +180,6 @@ export async function geocodeAsync(address) {
  * @return A promise which fulfills with an array (in most cases its size is 1) of [`LocationGeocodedAddress`](#locationgeocodedaddress) objects.
  *
  * @platform android
- * @platform ios
  */
 export async function reverseGeocodeAsync(location) {
     if (typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
@@ -282,7 +279,6 @@ function _validate(taskName) {
         if (!warnAboutExpoGoDisplayed) {
             const message = 'Background location is limited in Expo Go:\n' +
                 'On Android, it is not available at all.\n' +
-                'On iOS, it works when running in the Simulator.\n' +
                 'You can use this API, and all others, in a development build. Learn more: https://expo.fyi/dev-client.';
             console.warn(message);
             warnAboutExpoGoDisplayed = true;

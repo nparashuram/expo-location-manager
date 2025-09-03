@@ -1,4 +1,4 @@
-import { PermissionResponse } from 'expo-modules-core';
+import { PermissionResponse } from "expo-modules-core";
 /**
  * Enum with available location accuracies.
  */
@@ -54,7 +54,6 @@ export declare enum LocationActivityType {
     /**
      * Intended for airborne activities. Fall backs to `ActivityType.Other` if
      * unsupported.
-     * @platform ios
      */
     Airborne = 5
 }
@@ -142,7 +141,6 @@ export type LocationTaskOptions = LocationOptions & {
      * A boolean indicating whether the status bar changes its appearance when
      * location services are used in the background.
      * @default false
-     * @platform ios
      */
     showsBackgroundLocationIndicator?: boolean;
     /**
@@ -160,9 +158,7 @@ export type LocationTaskOptions = LocationOptions & {
     deferredUpdatesInterval?: number;
     /**
      * The type of user activity associated with the location updates.
-     * @see See [Apple docs](https://developer.apple.com/documentation/corelocation/cllocationmanager/1620567-activitytype) for more details.
      * @default ActivityType.Other
-     * @platform ios
      */
     activityType?: LocationActivityType;
     /**
@@ -172,7 +168,6 @@ export type LocationTaskOptions = LocationOptions & {
      * when the location data is unlikely to change. You can help the determination of when to pause
      * location updates by assigning a value to the `activityType` property.
      * @default false
-     * @platform ios
      */
     pausesUpdatesAutomatically?: boolean;
     foregroundService?: LocationTaskServiceOptions;
@@ -340,7 +335,7 @@ export type LocationHeadingObject = {
      * - `1`: low accuracy
      * - `0`: none
      *
-     * Reference for iOS:
+     * Reference for Android:
      * - `3`: < 20 degrees uncertainty
      * - `2`: < 35 degrees
      * - `1`: < 50 degrees
@@ -418,11 +413,6 @@ export type LocationGeocodedAddress = {
      */
     isoCountryCode: string | null;
     /**
-     * The timezone identifier associated with the address.
-     * @platform ios
-     */
-    timezone: string | null;
-    /**
      * Composed string of the address components, for example, "111 8th Avenue, New York, NY".
      * @platform android
      */
@@ -438,24 +428,17 @@ export type LocationSubscription = {
      */
     remove: () => void;
 };
-export type PermissionDetailsLocationIOS = {
-    /**
-     * The scope of granted permission. Indicates when it's possible to use location.
-     */
-    scope: 'whenInUse' | 'always' | 'none';
-};
 export type PermissionDetailsLocationAndroid = {
     /**
      * Indicates the type of location provider.
      */
-    accuracy: 'fine' | 'coarse' | 'none';
+    accuracy: "fine" | "coarse" | "none";
 };
 /**
  * `LocationPermissionResponse` extends [`PermissionResponse`](#permissionresponse)
  * type exported by `expo-modules-core` and contains additional platform-specific fields.
  */
 export type LocationPermissionResponse = PermissionResponse & {
-    ios?: PermissionDetailsLocationIOS;
     android?: PermissionDetailsLocationAndroid;
 };
 export type { PermissionResponse };
